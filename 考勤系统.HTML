@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>动态考勤表</title>
+<script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+<style>
+*{box-sizing:border-box;font-family:system-ui,sans-serif;margin:0;padding:0;}
+body{padding:16px;background:#f5f7fa;}
+.container{max-width:1240px;margin:0 auto;background:#fff;padding:20px;border-radius:12px;box-shadow:0 2px 10px #0002;}
+h1{text-align:center;color:#009688;margin:0 0 12px 0;font-size:24px;font-weight:bold;}
+.info-bar{display:flex;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap;}
+.legend{margin-left:auto;gap:12px;display:flex;font-size:14px;flex-wrap:wrap;}
+select,button,input{padding:8px 10px;font-size:15px;border:1px solid #ccc;border-radius:6px;}
+button{cursor:pointer;}
+.table-wrap{overflow-x:auto;max-width:100%;}
+table{border-collapse:collapse;margin-top:8px;min-width:950px;}
+th,td{border:1px solid #aaa;text-align:center;padding:6px 3px;font-size:13px;}
+thead th{background:#00b8a9;color:#fff;position:sticky;top:0;z-index:3;}
+.name-col{background:#e8f4f3;position:sticky;left:0;z-index:2;}
+thead th.name-col{z-index:4;}
+.weekend-th{background:#ffd966;color:#000;}
+.weekend-td{background:#fff3cd;}
+.mark-ok{background:#d4edda;color:#155724;}
+.mark-no{background:#f8d7da;color:#721c24;}
+.mark-rest{background:#e2e3e5;color:#383d41;}
+.mark-leave{background:#ddebf7;color:#004085;}
+.mark-early{background:#fff2cc;color:#b45309;}
+.mark-late{background:#ffe6e6;color:#922b21;}
+.mark-leaveearly{background:#e6f7ff;color:#0050b3;}
+.delBtn{color:#dc3545;background:transparent;border:none;font-weight:bold;}
+input[type="file"]{display:none;}
+.stat-th{background:#b2dfdb;color:#000;}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>动态考勤表</h1>
+<div class="info-bar">
+  <label>年份：<select id="yearSel"></select></label>
+  <label>月份：<select id="monthSel"></select></label>
+  <button onclick="renderTable()">生成考勤表</button>
+  <button onclick="exportExcel()">📥导出Excel</button>
+  <button onclick="clearMonthRecord()">清空本月考勤</button>
+  <button onclick="exportBackup()">📤导出备份</button>
+  <button onclick="document.getElementById('fileInput').click()">📥导入备份</button>
+  <input id="fileInput" type="file" accept=".json" onchange="importBackup(this.files[0])">
+  <div class="legend">出勤√ &nbsp;旷工× &nbsp;休息○ &nbsp;请假△ &nbsp;下早班▷ &nbsp;迟到⏱ &nbsp;早退↩</div>
+</div>
+<div class="info-bar">
+  <input id="nameInput" placeholder="输入员工姓名" onkeydown="if(event.key==='Enter')addStaff()">
+  <button onclick="addStaff()">添加员工</button>
+</div>
+<div class="table-wrap">
+<table id="attTable">
+  <thead></thead>
+  <tbody></tbody>
+</table>
+</div>
+</div>
+
+<script>
+const yearSel = document.getElementById('yearSel');
+const monthSel = document.getElementById('monthSel');
+const now = new Date();
+
+for(let y=2020;y<=2040;y++){
+  let opt = document.createElement('option');
+  opt.value=y;opt.innerText=y;
+  yearSel.appendChild(opt);
+}
+for(let m=1;m<=12;m++){
+  let opt = document.createElement('option');
+  opt.value=m;opt.innerText=m+"月";
+  monthSel.appendChild(opt);
+}
+yearSel.value = now.getFullYear();
+monthSel.value = now.getMonth()+1;
+
+const STORAGE_KEY = "attendance_data_20260912";
+let appData = JSON.parse(localStorage.getItem(STORAGE_KEY)) || {
+  staffList:["齐宏柏","张庭毓","许鑫旺","蒋洪旺","米尔古丽","杨天柱","邓洪宵","杨茂飞","许景权","谢万军","李雪豪","杨博翔","周东阳","聂力凡","黄演明","谷雪松","王律","李梦喜","尹如鑫","杨纲豪","张伟华","唐映宗","周祖国"],
+  records:{}
+};
+
+function saveStorage(){
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(appData));
+}
+
+function exportBackup(){
+  const blob = new Blob([JSON.stringify(appData,null,2)],{type:"application/json"});
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "考勤备份.json";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(a.href);
+  alert("备份已下载，换设备导入该文件即可");
+}
+
+function importBackup(file){
+  if(!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e){
+    try{
+      const data = JSON.parse(e.target.result);
+      if(!data.staffList || !data.records) return alert("备份文件格式错误");
+      if(!confirm("导入会覆盖本机全部考勤，确定继续？")) return;
+      appData = data;
+      saveStorage();
+      renderTable();
+      alert("导入成功");
+    }catch(err){
+      alert("读取失败，不是有效备份");
+    }
+  }
+  reader.readAsText(file);
+}
+
+function addStaff(){
+  let name = document.getElementById('nameInput').value.trim();
+  if(!name) return alert('请输入员工姓名');
+  if(appData.staffList.includes(name)) return alert('该员工已存在');
+  appData.staffList.push(name);
+  document.getElementById('nameInput').value = '';
+  saveStorage();
+  renderTable();
+}
+
+function delStaff(name){
+  if(!confirm(`确定删除【${name}】，全部考勤一并删除？`)) return;
+  appData.staffList = appData.staffList.filter(n => n !== name);
+  delete appData.records[name];
+  saveStorage();
+  renderTable();
+}
+
+function clearMonthRecord(){
+  const y = Number(yearSel.value);
+  const m = Number(monthSel.value);
+  if(!confirm("清空本月全部考勤标记？")) return;
+  Object.keys(appData.records).forEach(staffName=>{
+    Object.keys(appData.records[staffName]).forEach(dateKey=>{
+      let [yy,mm] = dateKey.split("-");
+      if(Number(yy)===y && Number(mm)===m){
+        delete appData.records[staffName][dateKey];
+      }
+    })
+  })
+  saveStorage();
+  renderTable();
+}
+
+function renderTable(){
+  const y = Number(yearSel.value);
+  const mIdx = Number(monthSel.value)-1;
+  const realM = mIdx+1;
+  const lastDay = new Date(y,mIdx+1,0);
+  const totalDays = lastDay.getDate();
+
+  let theadHtml = `<tr><th class="name-col" rowspan="2">姓名</th>`;
+  let weekTr = `<tr>`;
+  for(let d=1;d<=totalDays;d++){
+    let dt = new Date(y,mIdx,d);
+    let wIdx = dt.getDay()===0 ? 6 : dt.getDay()-1;
+    let weekTxt = ['一','二','三','四','五','六','日'][wIdx];
+    let isWeekend = dt.getDay()===0 || dt.getDay()===6;
+    theadHtml += `<th class="${isWeekend?'weekend-th':''}">${d}</th>`;
+    weekTr += `<th class="${isWeekend?'weekend-th':''}">${weekTxt}</th>`;
+  }
+  //统计列：出勤、旷工、休息、请假、下早班、迟到、早退
+  theadHtml += `<th class="stat-th" rowspan="2">出勤</th><th class="stat-th" rowspan="2">旷工</th><th class="stat-th" rowspan="2">休息</th><th class="stat-th" rowspan="2">请假</th><th class="stat-th" rowspan="2">下早班</th><th class="stat-th" rowspan="2">迟到</th><th class="stat-th" rowspan="2">早退</th><th rowspan="2">操作</th></tr>`;
+  weekTr += `</tr>`;
+  theadHtml = theadHtml + weekTr;
+
+  let tbodyHtml = "";
+  appData.staffList.forEach(name=>{
+    tbodyHtml += `<tr><td class="name-col">${name}</td>`;
+    let cntOk=0,cntNo=0,cntRest=0,cntLeave=0,cntEarly=0,cntLate=0,cntLeaveEarly=0;
+    for(let d=1;d<=totalDays;d++){
+      let dt = new Date(y,mIdx,d);
+      let isWeekend = dt.getDay()===0 || dt.getDay()===6;
+      const dateKey = `${y}-${String(realM).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const cellVal = (appData.records[name] && appData.records[name][dateKey]) || "";
+      if(cellVal==="√") cntOk++;
+      if(cellVal==="×") cntNo++;
+      if(cellVal==="○") cntRest++;
+      if(cellVal==="△") cntLeave++;
+      if(cellVal==="▷") cntEarly++;
+      if(cellVal==="⏱") cntLate++;
+      if(cellVal==="↩") cntLeaveEarly++;
+      tbodyHtml += `<td class="cell ${isWeekend?'weekend-td':''}" onclick="toggleCell(this,'${name}','${dateKey}')">${cellVal}</td>`;
+    }
+    tbodyHtml += `<td>${cntOk}</td><td>${cntNo}</td><td>${cntRest}</td><td>${cntLeave}</td><td>${cntEarly}</td><td>${cntLate}</td><td>${cntLeaveEarly}</td><td><button class="delBtn" onclick="delStaff('${name}')">×删除</button></td></tr>`;
+  })
+
+  document.querySelector('#attTable thead').innerHTML = theadHtml;
+  document.querySelector('#attTable tbody').innerHTML = tbodyHtml;
+}
+
+function toggleCell(td,staffName,dateKey){
+  //循环顺序：空 → √出勤 → ×旷工 → ○休息 → △请假 → ▷下早班 → ⏱迟到 → ↩早退
+  const status = ["","√","×","○","△","▷","⏱","↩"];
+  const cls = ["","mark-ok","mark-no","mark-rest","mark-leave","mark-early","mark-late","mark-leaveearly"];
+  let idx = status.indexOf(td.innerText.trim());
+  idx = (idx+1) % status.length;
+  td.innerText = status[idx];
+  td.className = td.className.replace(/mark-\w+/g,'');
+  if(cls[idx]) td.classList.add(cls[idx]);
+
+  if(!appData.records[staffName]) appData.records[staffName]={};
+  appData.records[staffName][dateKey] = status[idx];
+  saveStorage();
+  renderTable();
+}
+
+function exportExcel(){
+  if(typeof XLSX === 'undefined'){
+    alert("需要联网加载导出组件，刷新页面");
+    return;
+  }
+  const y = Number(yearSel.value);
+  const m = Number(monthSel.value);
+  const mIdx = m-1;
+  const totalDays = new Date(y,m,0).getDate();
+
+  const aoa = [];
+  const titleRow = ["动态考勤表"];
+  for(let i=0;i<totalDays+8;i++) titleRow.push("");
+  aoa.push(titleRow);
+  const infoRow = [`考勤日期：${y}年${m}月`];
+  for(let i=0;i<totalDays-7;i++) infoRow.push("");
+  infoRow.push("出勤√");infoRow.push("旷工×");infoRow.push("休息○");infoRow.push("请假△");infoRow.push("下早班▷");infoRow.push("迟到⏱");infoRow.push("早退↩");
+  aoa.push(infoRow);
+  const dateRow = ["姓名"];
+  for(let d=1;d<=totalDays;d++) dateRow.push(d);
+  dateRow.push("出勤");dateRow.push("旷工");dateRow.push("休息");dateRow.push("请假");dateRow.push("下早班");dateRow.push("迟到");dateRow.push("早退");dateRow.push("");
+  aoa.push(dateRow);
+  const weekRow = [""];
+  for(let d=1;d<=totalDays;d++){
+    let dt = new Date(y,mIdx,d);
+    let w = ['一','二','三','四','五','六','日'][dt.getDay()===0?6:dt.getDay()-1];
+    weekRow.push(w);
+  }
+  weekRow.push("");weekRow.push("");weekRow.push("");weekRow.push("");weekRow.push("");weekRow.push("");weekRow.push("");weekRow.push("");
+  aoa.push(weekRow);
+
+  appData.staffList.forEach(name=>{
+    const r = [name];
+    let cntOk=0,cntNo=0,cntRest=0,cntLeave=0,cntEarly=0,cntLate=0,cntLeaveEarly=0;
+    for(let d=1;d<=totalDays;d++){
+      const dk = `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
+      const val = (appData.records[name]&&appData.records[name][dk])||"";
+      r.push(val);
+      if(val==="√") cntOk++;
+      if(val==="×") cntNo++;
+      if(val==="○") cntRest++;
+      if(val==="△") cntLeave++;
+      if(val==="▷") cntEarly++;
+      if(val==="⏱") cntLate++;
+      if(val==="↩") cntLeaveEarly++;
+    }
+    r.push(cntOk);r.push(cntNo);r.push(cntRest);r.push(cntLeave);r.push(cntEarly);r.push(cntLate);r.push(cntLeaveEarly);r.push("");
+    aoa.push(r);
+  })
+
+  const ws = XLSX.utils.aoa_to_sheet(aoa);
+  ws["!merges"] = [
+    {s:{r:0,c:0}, e:{r:0,c:totalDays+7}}
+  ];
+  ws["!cols"] = [{wch:11}];
+  for(let i=0;i<totalDays;i++) ws["!cols"].push({wch:5.5});
+  ws["!cols"].push({wch:6},{wch:6},{wch:6},{wch:6},{wch:7},{wch:7},{wch:7},{wch:7});
+
+  const book = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(book,ws,`${y}年${m}月考勤`);
+  XLSX.writeFile(book,`${y}年${m}月考勤表.xlsx`);
+}
+
+renderTable();
+</script>
+</body>
+</html>
